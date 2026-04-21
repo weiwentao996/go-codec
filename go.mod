@@ -1,4 +1,4 @@
-module codec-core
+module go-codec
 
 go 1.17
 

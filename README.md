@@ -1,4 +1,4 @@
-# codec-core
+# go-code
 
 A reusable binary codec extracted from `hkim-data-transfer/lib/data`.
 
