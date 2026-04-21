@@ -1,4 +1,4 @@
-module go-codec
+module github.com/weiwentao996/go-codec
 
 go 1.17
 
