@@ -1,5 +1,7 @@
 # go-codec
 
+- [中文文档](README.zh-CN.md)
+
 A reusable binary codec extracted from `hkim-data-transfer/lib/data`.
 
 ## Scope
