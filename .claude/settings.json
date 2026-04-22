@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//d/work/go-codec/**)",
+      "Read(//d/work/go-codec/codec/**)"
+    ]
+  }
+}

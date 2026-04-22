@@ -1,4 +1,4 @@
-# go-code
+# go-codec
 
 A reusable binary codec extracted from `hkim-data-transfer/lib/data`.
 
@@ -18,9 +18,22 @@ It intentionally does **not** include protocol framing, command mapping, MQ wrap
 ## API
 
 ```go
+import "github.com/weiwentao996/go-codec/codec"
+
 b, err := codec.Marshal(v)
 err := codec.Unmarshal(b, &v)
 ```
+
+### Buffer-consuming decode
+
+```go
+buf := bytes.NewBuffer(payload)
+err := codec.Decode(buf, &header)
+err = codec.Decode(buf, &body)
+```
+
+Use `Decode` when the caller needs to consume a shared `*bytes.Buffer` across multiple sequential decode steps.
+On error, the buffer may already be partially consumed and the destination may already be partially populated.
 
 ## Configuration
 
@@ -29,6 +42,14 @@ err := codec.Unmarshal(b, &v)
 ```go
 b, err := codec.Marshal(v, codec.WithLegacyHKimPreset())
 err := codec.Unmarshal(b, &v, codec.WithLegacyHKimPreset())
+```
+
+For segmented legacy flows that decode from a shared buffer:
+
+```go
+buf := bytes.NewBuffer(payload)
+err := codec.Decode(buf, &part1, codec.WithLegacyHKimPreset())
+err = codec.Decode(buf, &part2, codec.WithLegacyHKimPreset())
 ```
 
 This preset keeps the historical behavior from `hkim-data-transfer`:
@@ -153,6 +174,14 @@ Current phase focuses on:
 - behavior compatibility
 - explicit configuration for byte order and bitfield layout
 - reusable core extraction
+
+### Recent updates
+
+- fixed byte-alignment when switching from `bitCount` / `subBitCount` fields to regular byte-aligned fields during encode and decode
+- added tag type validation for `bitCount`, `subBitCount`, `byteCount`, and `file`
+- introduced metadata caching for struct field tags and dispatch decisions to reduce repeated reflection work
+- added regression tests for bitfield alignment, tag validation, repeated calls, and concurrent use
+- added benchmarks for small structs, tagged structs, and nested structs
 
 Not included yet:
 

@@ -24,7 +24,7 @@ func encodeValueTree(buf *bytes.Buffer, v interface{}, cfg Config) error {
 	writer := newBitEncoder(buf, cfg.BitLayout)
 	if vv.Kind() != reflect.Struct {
 		if vv.Kind() == reflect.Array || vv.Kind() == reflect.Slice {
-			if err := encodeSliceOrArray(writer, vv, nil, cfg); err != nil {
+			if err := encodeSliceOrArray(writer, vv, nil, buildEncodeCollectionMeta(vv.Type(), nil), cfg); err != nil {
 				return err
 			}
 		} else {
@@ -35,24 +35,21 @@ func encodeValueTree(buf *bytes.Buffer, v interface{}, cfg Config) error {
 		return writer.flushPending()
 	}
 
-	for i := 0; i < vv.NumField(); i++ {
-		fieldValue := vv.Field(i)
-		fieldType := vv.Type().Field(i)
-		switch fieldValue.Kind() {
-		case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.UnsafePointer, reflect.Interface, reflect.Slice:
-			if fieldValue.IsNil() {
-				continue
-			}
-		}
+	meta, err := getEncodeTypeMeta(vv.Type())
+	if err != nil {
+		return err
+	}
 
-		tags, err := parseEncodeTag(fieldType.Tag)
-		if err != nil {
-			return err
-		}
-		if tags.Ignore {
+	for _, fieldMeta := range meta.fields {
+		fieldValue := vv.Field(fieldMeta.index)
+		if fieldMeta.needsNilCheck && fieldValue.IsNil() {
 			continue
 		}
-		if tags.File {
+
+		switch fieldMeta.op {
+		case fieldOpIgnore:
+			continue
+		case fieldOpFile:
 			fileBytes, err := readFile(fieldValue.String(), cfg)
 			if err != nil {
 				return err
@@ -60,26 +57,29 @@ func encodeValueTree(buf *bytes.Buffer, v interface{}, cfg Config) error {
 			if _, err := buf.Write(fileBytes); err != nil {
 				return err
 			}
-			continue
-		}
-		if tags.BitCount != 0 {
-			if err := writer.writeValueBits(fieldValue, tags.BitCount, cfg); err != nil {
+		case fieldOpBitCount:
+			if err := writer.writeValueBits(fieldValue, fieldMeta.tags.BitCount, cfg); err != nil {
 				return err
 			}
-			continue
-		}
-
-		switch fieldValue.Kind() {
-		case reflect.Struct, reflect.Ptr, reflect.Interface:
+		case fieldOpRecursive:
+			if err := writer.flushPending(); err != nil {
+				return err
+			}
 			if err := encodeValueTree(buf, fieldValue, cfg); err != nil {
 				return err
 			}
-		case reflect.Array, reflect.Slice:
-			if err := encodeSliceOrArray(writer, fieldValue, tags, cfg); err != nil {
+		case fieldOpSliceOrArray:
+			if err := writer.flushPending(); err != nil {
+				return err
+			}
+			if err := encodeSliceOrArray(writer, fieldValue, &fieldMeta.tags, fieldMeta.collection, cfg); err != nil {
 				return err
 			}
 		default:
-			if err := encodeValue(buf, fieldValue, tags, cfg); err != nil {
+			if err := writer.flushPending(); err != nil {
+				return err
+			}
+			if err := encodeValue(buf, fieldValue, &fieldMeta.tags, cfg); err != nil {
 				return err
 			}
 		}
@@ -87,23 +87,28 @@ func encodeValueTree(buf *bytes.Buffer, v interface{}, cfg Config) error {
 	return writer.flushPending()
 }
 
-func encodeSliceOrArray(writer *bitEncoder, fieldValue reflect.Value, tags *fieldTag, cfg Config) error {
+func encodeSliceOrArray(writer *bitEncoder, fieldValue reflect.Value, tags *fieldTag, collection collectionMeta, cfg Config) error {
 	for i := 0; i < fieldValue.Len(); i++ {
 		currentValue := fieldValue.Index(i)
-		if currentValue.Kind() == reflect.Struct || currentValue.Kind() == reflect.Array || currentValue.Kind() == reflect.Slice {
+		switch collection.op {
+		case collectionOpRecursive:
+			if err := writer.flushPending(); err != nil {
+				return err
+			}
 			if err := encodeValueTree(writer.buf, currentValue, cfg); err != nil {
 				return err
 			}
-			continue
-		}
-		if tags == nil || tags.SubBitCount == 0 {
+		case collectionOpSubBitCount:
+			if err := writer.writeValueBits(currentValue, tags.SubBitCount, cfg); err != nil {
+				return err
+			}
+		default:
+			if err := writer.flushPending(); err != nil {
+				return err
+			}
 			if err := encodeValue(writer.buf, currentValue, nil, cfg); err != nil {
 				return err
 			}
-			continue
-		}
-		if err := writer.writeValueBits(currentValue, tags.SubBitCount, cfg); err != nil {
-			return err
 		}
 	}
 	return nil

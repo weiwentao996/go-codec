@@ -167,3 +167,9 @@ func (d *bitDecoder) readBits(bitCount int) (uint64, error) {
 	d.index = newIndex
 	return result, nil
 }
+
+func (d *bitDecoder) alignToByte() {
+	if d.index%8 != 0 {
+		d.index = ((d.index + 7) / 8) * 8
+	}
+}

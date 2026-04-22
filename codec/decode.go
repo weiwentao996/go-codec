@@ -8,8 +8,12 @@ import (
 )
 
 func Unmarshal(data []byte, v interface{}, opts ...Option) error {
+	return Decode(bytes.NewBuffer(data), v, opts...)
+}
+
+func Decode(buf *bytes.Buffer, v interface{}, opts ...Option) error {
 	cfg := buildConfig(opts...)
-	return decodeValueTree(bytes.NewBuffer(data), v, cfg)
+	return decodeValueTree(buf, v, cfg)
 }
 
 func decodeValueTree(buf *bytes.Buffer, v interface{}, cfg Config) error {
@@ -22,7 +26,7 @@ func decodeValueTree(buf *bytes.Buffer, v interface{}, cfg Config) error {
 	if vv.Kind() != reflect.Struct {
 		if vv.Kind() == reflect.Array || vv.Kind() == reflect.Slice {
 			l := calLen(buf, vv, nil)
-			if err := decodeSliceOrArray(buf, reader, l, vv, nil, cfg); err != nil {
+			if err := decodeSliceOrArray(buf, reader, l, vv, nil, buildDecodeCollectionMeta(vv.Type(), nil), cfg); err != nil {
 				return err
 			}
 		} else {
@@ -33,50 +37,46 @@ func decodeValueTree(buf *bytes.Buffer, v interface{}, cfg Config) error {
 		return nil
 	}
 
-	for i := 0; i < vv.NumField(); i++ {
-		fieldValue := vv.Field(i)
-		fieldType := vv.Type().Field(i)
-		tags, err := parseDecodeTag(fieldType.Tag)
-		if err != nil {
-			return err
+	meta, err := getDecodeTypeMeta(vv.Type())
+	if err != nil {
+		return err
+	}
+
+	for _, fieldMeta := range meta.fields {
+		fieldValue := vv.Field(fieldMeta.index)
+		if fieldMeta.needsPtrInit && fieldValue.IsNil() && fieldValue.CanAddr() {
+			fieldValue.Set(reflect.New(fieldValue.Type().Elem()))
 		}
-		if tags.Ignore {
+		switch fieldMeta.op {
+		case fieldOpIgnore:
 			continue
-		}
-		if tags.File {
+		case fieldOpFile:
 			filePath, err := writeFile(vv.Type().Name(), buf.Bytes(), cfg)
 			if err != nil {
 				return err
 			}
 			fieldValue.SetString(filePath)
 			buf.Reset()
-			continue
-		}
-		if fieldValue.Kind() == reflect.Ptr {
-			if fieldValue.IsNil() && fieldValue.CanAddr() {
-				fieldValue.Set(reflect.New(fieldValue.Type().Elem()))
-			}
-		}
-		if tags.BitCount != 0 {
-			result, err := reader.readBits(tags.BitCount)
+		case fieldOpBitCount:
+			result, err := reader.readBits(fieldMeta.tags.BitCount)
 			if err != nil {
 				return err
 			}
 			fieldValue.SetUint(result)
-			continue
-		}
-		switch fieldValue.Kind() {
-		case reflect.Ptr, reflect.Interface:
+		case fieldOpRecursive:
+			reader.alignToByte()
 			if err := decodeValueTree(buf, fieldValue, cfg); err != nil {
 				return err
 			}
-		case reflect.Array, reflect.Slice:
-			l := calLen(buf, fieldValue, tags)
-			if err := decodeSliceOrArray(buf, reader, l, fieldValue, tags, cfg); err != nil {
+		case fieldOpSliceOrArray:
+			reader.alignToByte()
+			l := calLen(buf, fieldValue, &fieldMeta.tags)
+			if err := decodeSliceOrArray(buf, reader, l, fieldValue, &fieldMeta.tags, fieldMeta.collection, cfg); err != nil {
 				return err
 			}
 		default:
-			if err := decodeValue(buf, fieldValue, tags, cfg); err != nil {
+			reader.alignToByte()
+			if err := decodeValue(buf, fieldValue, &fieldMeta.tags, cfg); err != nil {
 				return err
 			}
 		}
@@ -103,25 +103,23 @@ func calLen(buf *bytes.Buffer, fieldValue reflect.Value, tags *fieldTag) int {
 	return l
 }
 
-func decodeSliceOrArray(buf *bytes.Buffer, reader *bitDecoder, l int, fieldValue reflect.Value, tags *fieldTag, cfg Config) error {
+func decodeSliceOrArray(buf *bytes.Buffer, reader *bitDecoder, l int, fieldValue reflect.Value, tags *fieldTag, collection collectionMeta, cfg Config) error {
 	for j := 0; j < l; j++ {
 		currentValue := fieldValue.Index(j)
-		switch {
-		case currentValue.Kind() == reflect.Ptr:
+		switch collection.op {
+		case collectionOpRecursive:
+			reader.alignToByte()
 			if err := decodeValueTree(buf, currentValue, cfg); err != nil {
 				return err
 			}
-		case currentValue.Kind() == reflect.Array:
-			if err := decodeValueTree(buf, currentValue, cfg); err != nil {
-				return err
-			}
-		case tags != nil && tags.SubBitCount != 0:
+		case collectionOpSubBitCount:
 			result, err := reader.readBits(tags.SubBitCount)
 			if err != nil {
 				return err
 			}
 			currentValue.SetUint(result)
 		default:
+			reader.alignToByte()
 			if err := decodeValue(buf, currentValue, nil, cfg); err != nil {
 				return err
 			}

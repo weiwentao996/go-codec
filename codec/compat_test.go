@@ -3,6 +3,7 @@ package codec
 import (
 	"bytes"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,6 +29,38 @@ type invalidEncodeTagFixture struct {
 
 type invalidDecodeTagFixture struct {
 	Value uint8 `decode:"bitCount:"`
+}
+
+type invalidEncodeBitCountTypeFixture struct {
+	Value string `encode:"bitCount:3"`
+}
+
+type invalidDecodeBitCountTypeFixture struct {
+	Value string `decode:"bitCount:3"`
+}
+
+type invalidEncodeSubBitCountTypeFixture struct {
+	Flags string `encode:"subBitCount:1"`
+}
+
+type invalidDecodeSubBitCountTypeFixture struct {
+	Flags string `decode:"subBitCount:1"`
+}
+
+type invalidEncodeByteCountTypeFixture struct {
+	Value uint8 `encode:"byteCount:4"`
+}
+
+type invalidDecodeByteCountTypeFixture struct {
+	Value uint8 `decode:"byteCount:4"`
+}
+
+type invalidEncodeFileTypeFixture struct {
+	Value uint8 `encode:"file"`
+}
+
+type invalidDecodeFileTypeFixture struct {
+	Value uint8 `decode:"file"`
 }
 
 type mixedBitFieldEncodeFixture struct {
@@ -75,6 +108,30 @@ type endianFixture struct {
 	Value32 uint32
 }
 
+type bitThenByteEncodeFixture struct {
+	A uint8 `encode:"bitCount:3"`
+	B uint8
+}
+
+type bitThenByteDecodeFixture struct {
+	A uint8 `decode:"bitCount:3"`
+	B uint8
+}
+
+type subBitThenByteEncodeFixture struct {
+	Flags [3]uint8 `encode:"subBitCount:1"`
+	B     uint8
+}
+
+type subBitThenByteDecodeFixture struct {
+	Flags [3]uint8 `decode:"subBitCount:1"`
+	B     uint8
+}
+
+type sequentialScalarFixture struct {
+	Value uint16
+}
+
 func TestEncodeSubBitCountArray(t *testing.T) {
 	data, err := Marshal(encodeSubBitCountFixture{Flags: [8]uint8{1, 0, 1, 0, 1, 0, 1, 0}})
 	assert.NoError(t, err)
@@ -94,6 +151,30 @@ func TestEncodeTrailingBitFieldFlush(t *testing.T) {
 	assert.Equal(t, []byte{0xA0}, data)
 }
 
+func TestBitFieldBeforeByteFieldAlignsToNextByte(t *testing.T) {
+	data, err := Marshal(bitThenByteEncodeFixture{A: 5, B: 0x12})
+	assert.NoError(t, err)
+	assert.Equal(t, []byte{0xA0, 0x12}, data)
+
+	var decoded bitThenByteDecodeFixture
+	err = Unmarshal(data, &decoded)
+	assert.NoError(t, err)
+	assert.Equal(t, uint8(5), decoded.A)
+	assert.Equal(t, uint8(0x12), decoded.B)
+}
+
+func TestSubBitArrayBeforeByteFieldAlignsToNextByte(t *testing.T) {
+	data, err := Marshal(subBitThenByteEncodeFixture{Flags: [3]uint8{1, 0, 1}, B: 0x12})
+	assert.NoError(t, err)
+	assert.Equal(t, []byte{0xA0, 0x12}, data)
+
+	var decoded subBitThenByteDecodeFixture
+	err = Unmarshal(data, &decoded)
+	assert.NoError(t, err)
+	assert.Equal(t, [3]uint8{1, 0, 1}, decoded.Flags)
+	assert.Equal(t, uint8(0x12), decoded.B)
+}
+
 func TestParseEncodeTagReturnsErrorOnInvalidNumber(t *testing.T) {
 	_, err := Marshal(invalidEncodeTagFixture{Value: 1})
 	assert.Error(t, err)
@@ -103,6 +184,50 @@ func TestParseDecodeTagReturnsErrorOnInvalidNumber(t *testing.T) {
 	var result invalidDecodeTagFixture
 	err := Unmarshal([]byte{0x01}, &result)
 	assert.Error(t, err)
+}
+
+func TestEncodeBitCountRejectsNonUnsignedIntegerField(t *testing.T) {
+	_, err := Marshal(invalidEncodeBitCountTypeFixture{Value: "abc"})
+	assert.EqualError(t, err, "bitCount tag requires unsigned integer field, got string")
+}
+
+func TestDecodeBitCountRejectsNonUnsignedIntegerField(t *testing.T) {
+	var result invalidDecodeBitCountTypeFixture
+	err := Unmarshal([]byte{0xA0}, &result)
+	assert.EqualError(t, err, "bitCount tag requires unsigned integer field, got string")
+}
+
+func TestEncodeSubBitCountRejectsNonArrayOrSliceField(t *testing.T) {
+	_, err := Marshal(invalidEncodeSubBitCountTypeFixture{Flags: "abc"})
+	assert.EqualError(t, err, "subBitCount tag requires array or slice field, got string")
+}
+
+func TestDecodeSubBitCountRejectsNonArrayOrSliceField(t *testing.T) {
+	var result invalidDecodeSubBitCountTypeFixture
+	err := Unmarshal([]byte{0xA0}, &result)
+	assert.EqualError(t, err, "subBitCount tag requires array or slice field, got string")
+}
+
+func TestEncodeByteCountRejectsNonStringField(t *testing.T) {
+	_, err := Marshal(invalidEncodeByteCountTypeFixture{Value: 1})
+	assert.EqualError(t, err, "byteCount tag requires string field, got uint8")
+}
+
+func TestDecodeByteCountRejectsNonStringField(t *testing.T) {
+	var result invalidDecodeByteCountTypeFixture
+	err := Unmarshal([]byte{0x01, 0x02, 0x03, 0x04}, &result)
+	assert.EqualError(t, err, "byteCount tag requires string field, got uint8")
+}
+
+func TestEncodeFileRejectsNonStringField(t *testing.T) {
+	_, err := Marshal(invalidEncodeFileTypeFixture{Value: 1})
+	assert.EqualError(t, err, "file tag requires string field, got uint8")
+}
+
+func TestDecodeFileRejectsNonStringField(t *testing.T) {
+	var result invalidDecodeFileTypeFixture
+	err := Unmarshal([]byte{0x01}, &result)
+	assert.EqualError(t, err, "file tag requires string field, got uint8")
 }
 
 func TestMixedBitFieldsEncodeAndDecode(t *testing.T) {
@@ -224,6 +349,47 @@ func TestDefaultMatchesLegacyPreset(t *testing.T) {
 	assert.Equal(t, legacyBytes, defaultBytes)
 }
 
+func TestDecodeMatchesUnmarshalForSingleValue(t *testing.T) {
+	data, err := Marshal(mixedBitFieldEncodeFixture{Prefix: 0x12, A: 5, B: 2, C: 3, Suffix: 0x34})
+	assert.NoError(t, err)
+
+	var fromBytes mixedBitFieldDecodeFixture
+	err = Unmarshal(data, &fromBytes)
+	assert.NoError(t, err)
+
+	buf := bytes.NewBuffer(data)
+	var fromBuffer mixedBitFieldDecodeFixture
+	err = Decode(buf, &fromBuffer)
+	assert.NoError(t, err)
+	assert.Equal(t, fromBytes, fromBuffer)
+	assert.Equal(t, 0, buf.Len())
+}
+
+func TestDecodeConsumesBufferSequentially(t *testing.T) {
+	first := sequentialScalarFixture{Value: 0x1234}
+	second := sequentialScalarFixture{Value: 0x5678}
+
+	firstBytes, err := Marshal(first)
+	assert.NoError(t, err)
+	secondBytes, err := Marshal(second)
+	assert.NoError(t, err)
+
+	buf := bytes.NewBuffer(append(firstBytes, secondBytes...))
+	assert.Equal(t, len(firstBytes)+len(secondBytes), buf.Len())
+
+	var firstDecoded sequentialScalarFixture
+	err = Decode(buf, &firstDecoded)
+	assert.NoError(t, err)
+	assert.Equal(t, first, firstDecoded)
+	assert.Equal(t, len(secondBytes), buf.Len())
+
+	var secondDecoded sequentialScalarFixture
+	err = Decode(buf, &secondDecoded)
+	assert.NoError(t, err)
+	assert.Equal(t, second, secondDecoded)
+	assert.Equal(t, 0, buf.Len())
+}
+
 func TestLittleEndianChangesScalarEncodingAndDecoding(t *testing.T) {
 	fixture := endianFixture{Value16: 0x1234, Value32: 0x01020304}
 
@@ -305,4 +471,74 @@ func TestMismatchedBitLayoutDoesNotDecodeLegacyBytesTheSame(t *testing.T) {
 	err = Unmarshal(legacyBytes, &decoded, WithBitLayout(LSBFirstLowToHigh))
 	assert.NoError(t, err)
 	assert.NotEqual(t, uint8(5), decoded.A)
+}
+
+func TestMetadataCacheRepeatedMarshalProducesSameBytes(t *testing.T) {
+	fixture := mixedBitFieldEncodeFixture{Prefix: 0x12, A: 5, B: 2, C: 3, Suffix: 0x34}
+
+	first, err := Marshal(fixture)
+	assert.NoError(t, err)
+
+	second, err := Marshal(fixture)
+	assert.NoError(t, err)
+	assert.Equal(t, first, second)
+}
+
+func TestMetadataCacheRepeatedUnmarshalProducesSameResult(t *testing.T) {
+	data := []byte{0x12, 0xAB, 0x34}
+
+	var first mixedBitFieldDecodeFixture
+	err := Unmarshal(data, &first)
+	assert.NoError(t, err)
+
+	var second mixedBitFieldDecodeFixture
+	err = Unmarshal(data, &second)
+	assert.NoError(t, err)
+	assert.Equal(t, first, second)
+}
+
+func TestMetadataCachePreservesConfigSpecificEncoding(t *testing.T) {
+	fixture := mixedBitFieldEncodeFixture{Prefix: 0x12, A: 5, B: 2, C: 3, Suffix: 0x34}
+
+	legacyBytes, err := Marshal(fixture)
+	assert.NoError(t, err)
+
+	altBytes, err := Marshal(fixture, WithBitLayout(LSBFirstLowToHigh))
+	assert.NoError(t, err)
+	assert.NotEqual(t, legacyBytes, altBytes)
+
+	bigEndian, err := Marshal(endianFixture{Value16: 0x1234, Value32: 0x01020304})
+	assert.NoError(t, err)
+
+	littleEndian, err := Marshal(endianFixture{Value16: 0x1234, Value32: 0x01020304}, WithByteOrder(LittleEndian))
+	assert.NoError(t, err)
+	assert.NotEqual(t, bigEndian, littleEndian)
+}
+
+func TestMetadataCacheIsConcurrentSafe(t *testing.T) {
+	fixture := mixedBitFieldEncodeFixture{Prefix: 0x12, A: 5, B: 2, C: 3, Suffix: 0x34}
+	expected, err := Marshal(fixture)
+	assert.NoError(t, err)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			data, err := Marshal(fixture)
+			assert.NoError(t, err)
+			assert.Equal(t, expected, data)
+
+			var decoded mixedBitFieldDecodeFixture
+			err = Unmarshal(expected, &decoded)
+			assert.NoError(t, err)
+			assert.Equal(t, uint8(0x12), decoded.Prefix)
+			assert.Equal(t, uint8(5), decoded.A)
+			assert.Equal(t, uint8(2), decoded.B)
+			assert.Equal(t, uint8(3), decoded.C)
+			assert.Equal(t, uint8(0x34), decoded.Suffix)
+		}()
+	}
+	wg.Wait()
 }
