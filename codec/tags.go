@@ -70,33 +70,52 @@ func parseTagInt(tagValue string) (int, error) {
 	return value, nil
 }
 
-func validateFieldTag(tags *fieldTag, fieldType reflect.Type) error {
+func validateCommonFieldTag(tags *fieldTag, fieldType reflect.Type) (kind reflect.Kind, err error) {
 	if tags == nil || tags.Ignore {
-		return nil
+		return fieldType.Kind(), nil
 	}
 
-	kind := fieldType.Kind()
+	kind = fieldType.Kind()
 	if kind == reflect.Pointer {
 		kind = fieldType.Elem().Kind()
 	}
 
 	if tags.File && kind != reflect.String {
-		return fmt.Errorf("file tag requires string field, got %s", fieldType.Kind())
+		return kind, fmt.Errorf("file tag requires string field, got %s", fieldType.Kind())
 	}
 	if tags.BitCount != 0 && !isUnsignedIntegerKind(kind) {
-		return fmt.Errorf("bitCount tag requires unsigned integer field, got %s", fieldType.Kind())
+		return kind, fmt.Errorf("bitCount tag requires unsigned integer field, got %s", fieldType.Kind())
 	}
 	if tags.SubBitCount != 0 {
 		if kind != reflect.Array && kind != reflect.Slice {
-			return fmt.Errorf("subBitCount tag requires array or slice field, got %s", fieldType.Kind())
+			return kind, fmt.Errorf("subBitCount tag requires array or slice field, got %s", fieldType.Kind())
 		}
 		elemKind := fieldType.Elem().Kind()
 		if !isUnsignedIntegerKind(elemKind) {
-			return fmt.Errorf("subBitCount tag requires unsigned integer elements, got %s", fieldType.Elem().Kind())
+			return kind, fmt.Errorf("subBitCount tag requires unsigned integer elements, got %s", fieldType.Elem().Kind())
 		}
 	}
-	if tags.ByteCount != 0 && kind != reflect.String {
+	return kind, nil
+}
+
+func validateEncodeFieldTag(tags *fieldTag, fieldType reflect.Type) error {
+	kind, err := validateCommonFieldTag(tags, fieldType)
+	if err != nil {
+		return err
+	}
+	if tags != nil && tags.ByteCount != 0 && kind != reflect.String {
 		return fmt.Errorf("byteCount tag requires string field, got %s", fieldType.Kind())
+	}
+	return nil
+}
+
+func validateDecodeFieldTag(tags *fieldTag, fieldType reflect.Type) error {
+	kind, err := validateCommonFieldTag(tags, fieldType)
+	if err != nil {
+		return err
+	}
+	if tags != nil && tags.ByteCount != 0 && kind != reflect.String && kind != reflect.Array && kind != reflect.Slice {
+		return fmt.Errorf("byteCount tag requires string, array, or slice field, got %s", fieldType.Kind())
 	}
 	return nil
 }

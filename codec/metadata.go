@@ -134,7 +134,7 @@ func buildEncodeFieldMeta(field reflect.StructField, index int) (encodeFieldMeta
 	if tags.Ignore {
 		return encodeFieldMeta{index: index, tags: *tags, op: fieldOpIgnore}, nil
 	}
-	if err := validateFieldTag(tags, field.Type); err != nil {
+	if err := validateEncodeFieldTag(tags, field.Type); err != nil {
 		return encodeFieldMeta{}, err
 	}
 
@@ -155,7 +155,7 @@ func buildDecodeFieldMeta(field reflect.StructField, index int) (decodeFieldMeta
 	if tags.Ignore {
 		return decodeFieldMeta{index: index, tags: *tags, op: fieldOpIgnore}, nil
 	}
-	if err := validateFieldTag(tags, field.Type); err != nil {
+	if err := validateDecodeFieldTag(tags, field.Type); err != nil {
 		return decodeFieldMeta{}, err
 	}
 
@@ -225,7 +225,7 @@ func buildDecodeCollectionMeta(fieldType reflect.Type, tags *fieldTag) collectio
 
 	elemKind := fieldType.Elem().Kind()
 	switch {
-	case elemKind == reflect.Ptr || elemKind == reflect.Array:
+	case elemKind == reflect.Ptr || elemKind == reflect.Struct || elemKind == reflect.Array || elemKind == reflect.Slice:
 		return collectionMeta{op: collectionOpRecursive}
 	case tags != nil && tags.SubBitCount != 0:
 		return collectionMeta{op: collectionOpSubBitCount}

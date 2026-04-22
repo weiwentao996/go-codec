@@ -95,6 +95,18 @@ type fixedStringDecodeFixture struct {
 	Name string `decode:"byteCount:5"`
 }
 
+type decodeByteCountSliceElementFixture struct {
+	Value uint16
+}
+
+type decodeByteCountSliceFixture struct {
+	Items []decodeByteCountSliceElementFixture `decode:"byteCount:2"`
+}
+
+type decodeByteCountPointerSliceFixture struct {
+	Items []*decodeByteCountSliceElementFixture `decode:"byteCount:2"`
+}
+
 type encodeFileFixture struct {
 	Path string `encode:"file"`
 }
@@ -213,10 +225,29 @@ func TestEncodeByteCountRejectsNonStringField(t *testing.T) {
 	assert.EqualError(t, err, "byteCount tag requires string field, got uint8")
 }
 
-func TestDecodeByteCountRejectsNonStringField(t *testing.T) {
+func TestDecodeByteCountRejectsUnsupportedFieldType(t *testing.T) {
 	var result invalidDecodeByteCountTypeFixture
 	err := Unmarshal([]byte{0x01, 0x02, 0x03, 0x04}, &result)
-	assert.EqualError(t, err, "byteCount tag requires string field, got uint8")
+	assert.EqualError(t, err, "byteCount tag requires string, array, or slice field, got uint8")
+}
+
+func TestDecodeByteCountSupportsSliceLengthInference(t *testing.T) {
+	var result decodeByteCountSliceFixture
+	err := Unmarshal([]byte{0x12, 0x34, 0x56, 0x78}, &result)
+	assert.NoError(t, err)
+	assert.Equal(t, []decodeByteCountSliceElementFixture{{Value: 0x1234}, {Value: 0x5678}}, result.Items)
+}
+
+func TestDecodeByteCountSupportsPointerSliceLengthInference(t *testing.T) {
+	var result decodeByteCountPointerSliceFixture
+	err := Unmarshal([]byte{0x12, 0x34, 0x56, 0x78}, &result)
+	assert.NoError(t, err)
+	if assert.Len(t, result.Items, 2) {
+		assert.NotNil(t, result.Items[0])
+		assert.NotNil(t, result.Items[1])
+		assert.Equal(t, uint16(0x1234), result.Items[0].Value)
+		assert.Equal(t, uint16(0x5678), result.Items[1].Value)
+	}
 }
 
 func TestEncodeFileRejectsNonStringField(t *testing.T) {
